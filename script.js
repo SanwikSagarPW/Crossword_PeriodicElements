@@ -1,4 +1,14 @@
 document.addEventListener('DOMContentLoaded', () => {
+    // ============================================
+    // ANALYTICS SETUP
+    // ============================================
+    const analytics = new AnalyticsManager();
+    analytics.initialize('crossword_periodic_elements', 'session_' + Date.now());
+    
+    let levelStartTime = 0;
+    let currentLevelId = null;
+    let checkAttempts = 0;
+
     // DOM Elements
     const gridElement = document.getElementById('crossword-grid');
     const acrossCluesElement = document.getElementById('across-clues');
@@ -52,6 +62,14 @@ document.addEventListener('DOMContentLoaded', () => {
             const { rows, cols } = metadata.size;
             titleElement.textContent = metadata.title;
             levelElement.textContent = 'Level 1';
+            
+            // Start analytics tracking
+            currentLevelId = 'level_' + metadata.title.toLowerCase().replace(/\s+/g, '_');
+            analytics.startLevel(currentLevelId);
+            levelStartTime = Date.now();
+            console.log('[Analytics] Level started:', currentLevelId);
+            checkAttempts = 0;
+            
             gridState = Array(rows).fill(null).map(() => Array(cols).fill(null));
             gridElement.style.setProperty('--grid-rows', rows);
             gridElement.style.setProperty('--grid-cols', cols);
@@ -92,6 +110,13 @@ document.addEventListener('DOMContentLoaded', () => {
     function endGameByTimeUp() {
         clearInterval(timerInterval);
         timerElement.textContent = "0:00";
+        
+        // Track time's up as failed level
+        const timeTakenMs = GAME_DURATION * 1000;
+        analytics.endLevel(currentLevelId, false, timeTakenMs, 0);
+        console.log('[Analytics] Session ended (time\'s up)');
+        analytics.submitReport();
+        
         timesUpOverlay.classList.remove('hidden');
         document.querySelectorAll('.cell-input').forEach(input => { input.readOnly = true; });
         checkButton.disabled = true;
@@ -267,7 +292,60 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- PUZZLE CHECKING & SUBMISSION ---
 
     function checkCompletion() {
-        if ([...document.querySelectorAll('.cell-input')].every(input => input.value.trim() !== '')) {
+        checkAttempts++;
+        
+        const inputs = document.querySelectorAll('.cell-input');
+        let filledCount = 0;
+        let correctCount = 0;
+        let incorrectCount = 0;
+        const totalItems = inputs.length;
+        
+        inputs.forEach(input => {
+            if (input.value.trim() !== '') {
+                filledCount++;
+                const enteredValue = input.value.toUpperCase();
+                const correctValue = input.dataset.answer;
+                if (enteredValue === correctValue) {
+                    correctCount++;
+                } else {
+                    incorrectCount++;
+                }
+            }
+        });
+        
+        const emptyCount = totalItems - filledCount;
+        const accuracy = totalItems > 0 ? (correctCount / totalItems * 100).toFixed(1) : 0;
+        const allFilled = filledCount === totalItems;
+        
+        // Log check attempt
+        console.log('[Analytics] Check attempt #' + checkAttempts, {
+            correct: correctCount,
+            incorrect: incorrectCount,
+            empty: emptyCount,
+            accuracy: accuracy + '%'
+        });
+        
+        // Record task
+        analytics.recordTask(
+            currentLevelId,
+            'check_attempt_' + checkAttempts,
+            `Check Attempt #${checkAttempts}`,
+            'all_filled',
+            allFilled ? 'all_filled' : 'incomplete',
+            Date.now() - levelStartTime,
+            allFilled ? 10 : 0
+        );
+        
+        // Track metrics
+        analytics.addRawMetric('check_attempts', checkAttempts);
+        analytics.addRawMetric('accuracy_percent', accuracy);
+        analytics.addRawMetric('correct_items', correctCount);
+        analytics.addRawMetric('incorrect_items', incorrectCount);
+        analytics.addRawMetric('empty_items', emptyCount);
+        
+        console.log('[Analytics] Metrics tracked:', analytics.getReportData().rawData);
+        
+        if (allFilled) {
             checkButton.classList.add('hidden');
             submitButton.classList.remove('hidden');
         } else {
@@ -293,6 +371,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (allCorrect) {
             clearInterval(timerInterval);
             const timeTaken = GAME_DURATION - timeRemaining;
+            const timeTakenMs = timeTaken * 1000;
+            
+            // Calculate XP with bonuses (as per original scoring)
             let finalScore = 50; // Default score
             if (timeTaken <= 240) { // less than 4 mins
                 finalScore = 200;
@@ -301,10 +382,43 @@ document.addEventListener('DOMContentLoaded', () => {
             } else if (timeTaken <= 480) { // less than 8 mins
                 finalScore = 100;
             }
-            scoreDisplayElement.textContent = finalScore;
+            
+            // Add bonus based on attempts
+            const baseXP = finalScore;
+            const attemptBonus = Math.max(0, 50 - (checkAttempts - 1) * 10);
+            const totalXP = baseXP + attemptBonus;
+            
+            console.log('[Analytics] Level completed!', {
+                timeTaken: timeTaken + 's',
+                baseXP: baseXP,
+                attemptBonus: attemptBonus,
+                totalXP: totalXP
+            });
+            
+            // End level tracking
+            analytics.endLevel(currentLevelId, true, timeTakenMs, totalXP);
+            
+            // Log full report before submission
+            console.log('[Analytics] Full Report:', analytics.getReportData());
+            
+            // Submit the report
+            analytics.submitReport();
+            
+            scoreDisplayElement.textContent = totalXP;
             inputs.forEach(input => input.readOnly = true);
             successOverlay.classList.remove('hidden');
         } else {
+            // Track failed submission attempt
+            analytics.recordTask(
+                currentLevelId,
+                'submit_attempt_failed',
+                'Failed Submit Attempt',
+                'all_correct',
+                'has_errors',
+                Date.now() - levelStartTime,
+                0
+            );
+            
             setTimeout(() => {
                 inputs.forEach(input => {
                     input.classList.remove('incorrect-flash');
@@ -348,6 +462,19 @@ document.addEventListener('DOMContentLoaded', () => {
     restartButton.addEventListener('click', () => location.reload());
     homeButton.addEventListener('click', () => { window.location.href = 'index.html'; });
     incompleteOkButton.addEventListener('click', () => incompleteOverlay.classList.add('hidden'));
+    
+    // --- TRACK INCOMPLETE SESSIONS ---
+    window.addEventListener('beforeunload', () => {
+        if (currentLevelId && levelStartTime > 0) {
+            const level = analytics._getLevelById(currentLevelId);
+            if (level && !level.successful) {
+                const timeTaken = Date.now() - levelStartTime;
+                analytics.endLevel(currentLevelId, false, timeTaken, 0);
+                analytics.submitReport();
+                console.log('[Analytics] Session ended (incomplete)');
+            }
+        }
+    });
     
     // Start Game
     startGame();
