@@ -244,21 +244,21 @@
     <script>
         const playBtn = document.getElementById('playBtn');
         const howToBtn = document.getElementById('howToBtn');
-        const howToPopup = document.getElementById('howToPopup');
-        const backBtn = document.getElementById('backBtn');
-        const howToPlayImg = document.getElementById('howToPlayImg');
         const bgAnimation = document.getElementById('bgAnimation');
         const bgMusic = document.getElementById('bgMusic');
         const musicControl = document.getElementById('musicControl');
         const puzzleSubtitle = document.getElementById('puzzle-subtitle');
 
-        // NEW  const response = await fetch('puzzle.json');
+        // Load puzzle title for subtitle
+        async function loadSubtitle() {
+            try {
+                const response = await fetch('puzzle.json');
                 if (!response.ok) throw new Error('Puzzle data not found');
                 const puzzleData = await response.json();
                 puzzleSubtitle.textContent = puzzleData.metadata.title;
             } catch (error) {
                 console.error("Could not load puzzle subtitle:", error);
-                puzzleSubtitle.textContent = "A Game of Words"; // Fallback text
+                puzzleSubtitle.textContent = "Chemical Elements"; // Fallback text
             }
         }
         loadSubtitle(); // Load the subtitle when the page loads
@@ -393,16 +393,8 @@
         startWordAnimation();
 
         // Event Listeners
-        howToPlayImg.addEventListener('error', function() { this.style.display = 'none'; });
         playBtn.addEventListener('click', () => { window.location.href = 'game.html'; });
-        howToBtn.addEventListener('click', () => {
-            howToPopup.classList.add('active');
-            document.body.style.overflow = 'hidden';
-        });
-
-        function closePopup() {
-            howToPopup.classList.remove('active');
-            document.body.style.overflow = 'auto';
-        }
-        playBtn.addEventListener('click', () => { window.location.href = 'game.html'; });
-        howToBtn.addEventListener('click', () => { window.location.href = 'howtoplay.html'
+        howToBtn.addEventListener('click', () => { window.location.href = 'howtoplay.html'; });
+    </script>
+</body>
+</html>
